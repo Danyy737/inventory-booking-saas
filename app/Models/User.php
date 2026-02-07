@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use App\Models\Organisation;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -21,7 +23,7 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
-        'current_organization_id',
+        'current_organisation_id',
     ];
 
     /**
@@ -45,28 +47,21 @@ class User extends Authenticatable
     ];
 
     /**
-     * Organizations this user belongs to (multi-tenant membership).
+     * Organisations this user belongs to (multi-tenant memberships).
+     * Pivot table: organisation_user (includes 'role').
      */
-    public function organizations()
+    public function organisations(): BelongsToMany
     {
-        return $this->belongsToMany(Organization::class)
+        return $this->belongsToMany(Organisation::class)
             ->withPivot('role')
             ->withTimestamps();
     }
 
     /**
-     * The organization the user is currently operating in.
+     * The organisation the user is currently operating in.
      */
-    public function currentOrganization()
+    public function currentOrganisation(): BelongsTo
     {
-        return $this->belongsTo(Organization::class, 'current_organization_id');
+        return $this->belongsTo(Organisation::class, 'current_organisation_id');
     }
-  
-
-public function currentOrganisation(): BelongsTo
-{
-    return $this->belongsTo(Organisation::class, 'current_organisation_id');
 }
-}
-
-
