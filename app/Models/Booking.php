@@ -4,16 +4,15 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class InventoryReservation extends Model
+class Booking extends Model
 {
     protected $fillable = [
         'organisation_id',
-        'inventory_item_id',
-        'booking_id',
-        'reserved_quantity',
+        'reference',
         'start_at',
         'end_at',
         'status',
+        'notes',
     ];
 
     protected $casts = [
@@ -26,14 +25,8 @@ class InventoryReservation extends Model
         return $this->belongsTo(Organisation::class);
     }
 
-    public function item()
+    public function reservations()
     {
-        return $this->belongsTo(InventoryItem::class, 'inventory_item_id');
+        return $this->hasMany(InventoryReservation::class);
     }
-
-    public function booking()
-{
-    return $this->belongsTo(Booking::class);
-}
-
 }
