@@ -179,4 +179,56 @@ class InventoryController extends Controller
 
         return response()->noContent();
     }
+
+    public function checkAvailability(Request $request)
+{
+    $user = $request->user();
+
+    if (!$user) {
+        return response()->json(['message' => 'Unauthenticated.'], 401);
+    }
+
+    if (!$user->current_organisation_id) {
+        return response()->json(['message' => 'No active organisation selected.'], 409);
+    }
+
+    $orgId = (int) $user->current_organisation_id;
+
+    $validated = $request->validate([
+        'inventory_item_id' => ['required', 'integer'],
+        'start_at' => ['required', 'date'],
+        'end_at' => ['required', 'date', 'after:start_at'],
+        'quantity' => ['required', 'integer', 'min:1', 'max:1000000'],
+    ]);
+
+    $item = InventoryItem::query()
+        ->where('organisation_id', $orgId)
+        ->where('id', $validated['inventory_item_id'])
+        ->with('stock')
+        ->firstOrFail();
+
+    $total = (int) optional($item->stock)->total_quantity;
+
+    $reserved = (int) $item->reservations()
+        ->where('organisation_id', $orgId)
+        ->where('status', 'active')
+        ->where('start_at', '<', $validated['end_at'])   // overlap rule
+        ->where('end_at', '>', $validated['start_at'])   // overlap rule
+        ->sum('reserved_quantity');
+
+    $remaining = max(0, $total - $reserved);
+    $requested = (int) $validated['quantity'];
+
+    return response()->json([
+        'data' => [
+            'inventory_item_id' => $item->id,
+            'total_quantity' => $total,
+            'reserved_quantity' => $reserved,
+            'remaining_quantity' => $remaining,
+            'requested_quantity' => $requested,
+            'available' => $remaining >= $requested,
+        ],
+    ]);
+}
+
 }

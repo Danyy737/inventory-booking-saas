@@ -21,3 +21,7 @@ Route::patch('/inventory/items/{id}', [InventoryController::class, 'update']);
 
 // Delete Inventory
 Route::delete('/inventory/items/{id}', [InventoryController::class, 'destroy']);
+
+
+//Available During Start and End
+Route::post('/inventory/check-availability', [InventoryController::class, 'checkAvailability']);
