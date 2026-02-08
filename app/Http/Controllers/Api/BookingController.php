@@ -179,17 +179,22 @@ class BookingController extends Controller
         ->with('reservations')
         ->firstOrFail();
 
-    // Idempotent: cancelling twice is not an error
+    // 🚫 Rule: cannot cancel bookings that have already ended
+    if ($booking->end_at->isPast()) {
+        return response()->json([
+            'message' => 'Past bookings cannot be cancelled.',
+        ], 422);
+    }
+
+    // Idempotent: cancelling twice is OK
     if ($booking->status === 'cancelled') {
         return response()->json([
             'data' => $booking->load('reservations'),
         ]);
     }
 
-    DB::transaction(function () use ($booking) {
+    \DB::transaction(function () use ($booking) {
         $booking->update(['status' => 'cancelled']);
-
-        // Release inventory by cancelling reservations (don’t delete history)
         $booking->reservations()->update(['status' => 'cancelled']);
     });
 
@@ -197,5 +202,6 @@ class BookingController extends Controller
         'data' => $booking->fresh()->load('reservations'),
     ]);
 }
+
 
 }
