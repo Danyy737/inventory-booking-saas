@@ -34,3 +34,6 @@ Route::get('/bookings/{id}', [BookingController::class, 'show']);
 
 //Cancel Booking
 Route::patch('/bookings/{id}/cancel', [BookingController::class, 'cancel']);
+
+//Update Booking
+Route::patch('/bookings/{id}', [BookingController::class, 'update']);
