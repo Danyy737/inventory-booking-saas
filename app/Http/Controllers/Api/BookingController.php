@@ -158,4 +158,44 @@ class BookingController extends Controller
             'data' => $booking,
         ], 201);
     }
+
+    public function cancel(Request $request, $id)
+{
+    $user = $request->user();
+
+    if (!$user) {
+        return response()->json(['message' => 'Unauthenticated.'], 401);
+    }
+
+    if (!$user->current_organisation_id) {
+        return response()->json(['message' => 'No active organisation selected.'], 409);
+    }
+
+    $orgId = (int) $user->current_organisation_id;
+
+    $booking = Booking::query()
+        ->where('organisation_id', $orgId)
+        ->where('id', $id)
+        ->with('reservations')
+        ->firstOrFail();
+
+    // Idempotent: cancelling twice is not an error
+    if ($booking->status === 'cancelled') {
+        return response()->json([
+            'data' => $booking->load('reservations'),
+        ]);
+    }
+
+    DB::transaction(function () use ($booking) {
+        $booking->update(['status' => 'cancelled']);
+
+        // Release inventory by cancelling reservations (don’t delete history)
+        $booking->reservations()->update(['status' => 'cancelled']);
+    });
+
+    return response()->json([
+        'data' => $booking->fresh()->load('reservations'),
+    ]);
+}
+
 }

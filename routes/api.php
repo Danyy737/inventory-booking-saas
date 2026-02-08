@@ -31,3 +31,6 @@ Route::post('/inventory/check-availability', [InventoryController::class, 'check
 Route::post('/bookings', [BookingController::class, 'store']);
 Route::get('/bookings', [BookingController::class, 'index']);
 Route::get('/bookings/{id}', [BookingController::class, 'show']);
+
+//Cancel Booking
+Route::patch('/bookings/{id}/cancel', [BookingController::class, 'cancel']);
