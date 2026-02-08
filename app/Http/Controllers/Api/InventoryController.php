@@ -7,6 +7,7 @@ use App\Models\InventoryItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use App\Support\OrgRole;
 
 class InventoryController extends Controller
 {
@@ -15,53 +16,34 @@ class InventoryController extends Controller
         $this->middleware('auth:sanctum');
     }
 
+    private function ensureAdminLike($user)
+    {
+        if (!OrgRole::isAdminLike(OrgRole::currentRole($user))) {
+            abort(response()->json(['message' => 'Forbidden.'], 403));
+        }
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
 
-        if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
-        }
-
         if (!$user->current_organisation_id) {
-            return response()->json([
-                'message' => 'No active organisation selected.',
-            ], 409);
+            return response()->json(['message' => 'No active organisation selected.'], 409);
         }
 
         $items = InventoryItem::query()
             ->where('organisation_id', $user->current_organisation_id)
             ->with(['stock:id,organisation_id,inventory_item_id,total_quantity'])
             ->orderBy('name')
-            ->get([
-                'id',
-                'organisation_id',
-                'name',
-                'sku',
-                'description',
-                'is_active',
-                'created_at',
-                'updated_at',
-            ]);
+            ->get();
 
-        return response()->json([
-            'data' => $items,
-        ]);
+        return response()->json(['data' => $items]);
     }
 
     public function store(Request $request)
     {
         $user = $request->user();
-
-        if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
-        }
-
-        if (!$user->current_organisation_id) {
-            return response()->json([
-                'message' => 'No active organisation selected.',
-            ], 409);
-        }
+        $this->ensureAdminLike($user);
 
         $orgId = (int) $user->current_organisation_id;
 
@@ -76,7 +58,7 @@ class InventoryController extends Controller
             ],
             'description' => ['nullable', 'string'],
             'is_active' => ['sometimes', 'boolean'],
-            'total_quantity' => ['required', 'integer', 'min:0', 'max:1000000'],
+            'total_quantity' => ['required', 'integer', 'min:0'],
         ]);
 
         $item = DB::transaction(function () use ($validated, $orgId) {
@@ -96,27 +78,15 @@ class InventoryController extends Controller
             return $item->load('stock');
         });
 
-        return response()->json([
-            'data' => $item,
-        ], 201);
+        return response()->json(['data' => $item], 201);
     }
 
     public function update(Request $request, $id)
     {
         $user = $request->user();
+        $this->ensureAdminLike($user);
 
-        if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
-        }
-
-        if (!$user->current_organisation_id) {
-            return response()->json([
-                'message' => 'No active organisation selected.',
-            ], 409);
-        }
-
-        $item = InventoryItem::query()
-            ->where('organisation_id', $user->current_organisation_id)
+        $item = InventoryItem::where('organisation_id', $user->current_organisation_id)
             ->where('id', $id)
             ->firstOrFail();
 
@@ -132,7 +102,7 @@ class InventoryController extends Controller
             ],
             'description' => ['nullable', 'string'],
             'is_active' => ['sometimes', 'boolean'],
-            'total_quantity' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
+            'total_quantity' => ['sometimes', 'integer', 'min:0'],
         ]);
 
         DB::transaction(function () use ($item, $validated, $user) {
@@ -151,84 +121,60 @@ class InventoryController extends Controller
             }
         });
 
-        return response()->json([
-            'data' => $item->load('stock'),
-        ]);
+        return response()->json(['data' => $item->load('stock')]);
     }
 
     public function destroy(Request $request, $id)
     {
         $user = $request->user();
+        $this->ensureAdminLike($user);
 
-        if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
-        }
-
-        if (!$user->current_organisation_id) {
-            return response()->json([
-                'message' => 'No active organisation selected.',
-            ], 409);
-        }
-
-        $item = InventoryItem::query()
-            ->where('organisation_id', $user->current_organisation_id)
+        InventoryItem::where('organisation_id', $user->current_organisation_id)
             ->where('id', $id)
-            ->firstOrFail();
-
-        $item->delete();
+            ->firstOrFail()
+            ->delete();
 
         return response()->noContent();
     }
 
     public function checkAvailability(Request $request)
-{
-    $user = $request->user();
+    {
+        $user = $request->user();
 
-    if (!$user) {
-        return response()->json(['message' => 'Unauthenticated.'], 401);
+        if (!$user->current_organisation_id) {
+            return response()->json(['message' => 'No active organisation selected.'], 409);
+        }
+
+        $orgId = (int) $user->current_organisation_id;
+
+        $validated = $request->validate([
+            'inventory_item_id' => ['required', 'integer'],
+            'start_at' => ['required', 'date'],
+            'end_at' => ['required', 'date', 'after:start_at'],
+            'quantity' => ['required', 'integer', 'min:1'],
+        ]);
+
+        $item = InventoryItem::where('organisation_id', $orgId)
+            ->where('id', $validated['inventory_item_id'])
+            ->with('stock')
+            ->firstOrFail();
+
+        $total = (int) optional($item->stock)->total_quantity;
+
+        $reserved = (int) $item->reservations()
+            ->where('organisation_id', $orgId)
+            ->where('status', 'active')
+            ->where('start_at', '<', $validated['end_at'])
+            ->where('end_at', '>', $validated['start_at'])
+            ->sum('reserved_quantity');
+
+        $remaining = max(0, $total - $reserved);
+
+        return response()->json([
+            'data' => [
+                'available' => $remaining >= $validated['quantity'],
+                'remaining_quantity' => $remaining,
+            ],
+        ]);
     }
-
-    if (!$user->current_organisation_id) {
-        return response()->json(['message' => 'No active organisation selected.'], 409);
-    }
-
-    $orgId = (int) $user->current_organisation_id;
-
-    $validated = $request->validate([
-        'inventory_item_id' => ['required', 'integer'],
-        'start_at' => ['required', 'date'],
-        'end_at' => ['required', 'date', 'after:start_at'],
-        'quantity' => ['required', 'integer', 'min:1', 'max:1000000'],
-    ]);
-
-    $item = InventoryItem::query()
-        ->where('organisation_id', $orgId)
-        ->where('id', $validated['inventory_item_id'])
-        ->with('stock')
-        ->firstOrFail();
-
-    $total = (int) optional($item->stock)->total_quantity;
-
-    $reserved = (int) $item->reservations()
-        ->where('organisation_id', $orgId)
-        ->where('status', 'active')
-        ->where('start_at', '<', $validated['end_at'])   // overlap rule
-        ->where('end_at', '>', $validated['start_at'])   // overlap rule
-        ->sum('reserved_quantity');
-
-    $remaining = max(0, $total - $reserved);
-    $requested = (int) $validated['quantity'];
-
-    return response()->json([
-        'data' => [
-            'inventory_item_id' => $item->id,
-            'total_quantity' => $total,
-            'reserved_quantity' => $reserved,
-            'remaining_quantity' => $remaining,
-            'requested_quantity' => $requested,
-            'available' => $remaining >= $requested,
-        ],
-    ]);
-}
-
 }
