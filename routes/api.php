@@ -29,4 +29,5 @@ Route::post('/inventory/check-availability', [InventoryController::class, 'check
 
 //Bookings
 Route::post('/bookings', [BookingController::class, 'store']);
-
+Route::get('/bookings', [BookingController::class, 'index']);
+Route::get('/bookings/{id}', [BookingController::class, 'show']);

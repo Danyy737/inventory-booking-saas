@@ -15,6 +15,71 @@ class BookingController extends Controller
         $this->middleware('auth:sanctum');
     }
 
+    /**
+     * List bookings for the current organisation
+     */
+    public function index(Request $request)
+    {
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        if (!$user->current_organisation_id) {
+            return response()->json(['message' => 'No active organisation selected.'], 409);
+        }
+
+        $orgId = (int) $user->current_organisation_id;
+
+        $bookings = Booking::query()
+            ->where('organisation_id', $orgId)
+            ->with([
+                'reservations:id,booking_id,organisation_id,inventory_item_id,reserved_quantity,start_at,end_at,status',
+                'reservations.item:id,organisation_id,name,sku,is_active',
+            ])
+            ->orderByDesc('start_at')
+            ->get();
+
+        return response()->json([
+            'data' => $bookings,
+        ]);
+    }
+
+    /**
+     * Show a single booking
+     */
+    public function show(Request $request, $id)
+    {
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        if (!$user->current_organisation_id) {
+            return response()->json(['message' => 'No active organisation selected.'], 409);
+        }
+
+        $orgId = (int) $user->current_organisation_id;
+
+        $booking = Booking::query()
+            ->where('organisation_id', $orgId)
+            ->where('id', $id)
+            ->with([
+                'reservations:id,booking_id,organisation_id,inventory_item_id,reserved_quantity,start_at,end_at,status',
+                'reservations.item:id,organisation_id,name,sku,is_active',
+            ])
+            ->firstOrFail();
+
+        return response()->json([
+            'data' => $booking,
+        ]);
+    }
+
+    /**
+     * Create a booking + reservations
+     */
     public function store(Request $request)
     {
         $user = $request->user();
@@ -33,18 +98,15 @@ class BookingController extends Controller
             'start_at' => ['required', 'date'],
             'end_at' => ['required', 'date', 'after:start_at'],
             'notes' => ['nullable', 'string'],
-
-            // items: [{ inventory_item_id: 1, quantity: 2 }, ...]
             'items' => ['required', 'array', 'min:1'],
             'items.*.inventory_item_id' => ['required', 'integer'],
-            'items.*.quantity' => ['required', 'integer', 'min:1', 'max:1000000'],
+            'items.*.quantity' => ['required', 'integer', 'min:1'],
         ]);
 
         $startAt = $validated['start_at'];
         $endAt = $validated['end_at'];
 
-        $result = DB::transaction(function () use ($validated, $orgId, $startAt, $endAt) {
-            // 1) Create booking first (we can rollback if availability fails)
+        $booking = DB::transaction(function () use ($validated, $orgId, $startAt, $endAt) {
             $booking = Booking::create([
                 'organisation_id' => $orgId,
                 'start_at' => $startAt,
@@ -53,14 +115,10 @@ class BookingController extends Controller
                 'notes' => $validated['notes'] ?? null,
             ]);
 
-            // 2) Check each item availability, then create reservation rows
             foreach ($validated['items'] as $row) {
-                $itemId = (int) $row['inventory_item_id'];
-                $qty = (int) $row['quantity'];
-
                 $item = InventoryItem::query()
                     ->where('organisation_id', $orgId)
-                    ->where('id', $itemId)
+                    ->where('id', $row['inventory_item_id'])
                     ->with('stock')
                     ->firstOrFail();
 
@@ -69,31 +127,24 @@ class BookingController extends Controller
                 $reserved = (int) $item->reservations()
                     ->where('organisation_id', $orgId)
                     ->where('status', 'active')
-                    ->where('start_at', '<', $endAt)  // overlap rule
-                    ->where('end_at', '>', $startAt)  // overlap rule
+                    ->where('start_at', '<', $endAt)
+                    ->where('end_at', '>', $startAt)
                     ->sum('reserved_quantity');
 
-                $remaining = max(0, $total - $reserved);
+                $remaining = $total - $reserved;
 
-                if ($remaining < $qty) {
-                    // Fail the whole transaction
+                if ($remaining < $row['quantity']) {
                     abort(response()->json([
-                        'message' => 'Insufficient availability for one or more items.',
-                        'data' => [
-                            'inventory_item_id' => $itemId,
-                            'requested_quantity' => $qty,
-                            'remaining_quantity' => $remaining,
-                            'start_at' => $startAt,
-                            'end_at' => $endAt,
-                        ],
+                        'message' => 'Insufficient availability',
+                        'inventory_item_id' => $item->id,
+                        'remaining' => $remaining,
                     ], 409));
                 }
 
-                // Create reservation linked to this booking
                 $item->reservations()->create([
                     'organisation_id' => $orgId,
                     'booking_id' => $booking->id,
-                    'reserved_quantity' => $qty,
+                    'reserved_quantity' => $row['quantity'],
                     'start_at' => $startAt,
                     'end_at' => $endAt,
                     'status' => 'active',
@@ -104,7 +155,7 @@ class BookingController extends Controller
         });
 
         return response()->json([
-            'data' => $result,
+            'data' => $booking,
         ], 201);
     }
 }
