@@ -1,7 +1,17 @@
 <?php
 
 use App\Http\Controllers\Api\MeController;
+use App\Http\Controllers\Api\InventoryController;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware('auth:sanctum')->get('/me', MeController::class);
+Route::middleware('auth:sanctum')->group(function () {
+    // Auth / session boundary
+    Route::get('/me', MeController::class);
+
+    // Inventory (organisation-scoped)
+    Route::get('/inventory/items', [InventoryController::class, 'index']);
+    Route::post('/inventory/items', [InventoryController::class, 'store']);
+});
+
+// Public / internal health check
 Route::get('/health', fn () => response()->json(['ok' => true]));
