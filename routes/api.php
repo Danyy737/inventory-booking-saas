@@ -15,3 +15,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // Public / internal health check
 Route::get('/health', fn () => response()->json(['ok' => true]));
+
+// Edit Inventory
+Route::patch('/inventory/items/{id}', [InventoryController::class, 'update']);
+
+// Delete Inventory
+Route::delete('/inventory/items/{id}', [InventoryController::class, 'destroy']);

@@ -5,21 +5,30 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\InventoryItem;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class InventoryController extends Controller
 {
+    public function __construct()
+    {
+        $this->middleware('auth:sanctum');
+    }
+
     public function index(Request $request)
     {
         $user = $request->user();
 
-        // Same boundary rules as /api/me
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
         if (!$user->current_organisation_id) {
             return response()->json([
                 'message' => 'No active organisation selected.',
             ], 409);
         }
 
-        // List only items belonging to the user’s current organisation
         $items = InventoryItem::query()
             ->where('organisation_id', $user->current_organisation_id)
             ->with(['stock:id,organisation_id,inventory_item_id,total_quantity'])
@@ -40,46 +49,134 @@ class InventoryController extends Controller
         ]);
     }
 
-   public function store(Request $request)
-{
-    $user = $request->user();
+    public function store(Request $request)
+    {
+        $user = $request->user();
 
-    if (!$user->current_organisation_id) {
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        if (!$user->current_organisation_id) {
+            return response()->json([
+                'message' => 'No active organisation selected.',
+            ], 409);
+        }
+
+        $orgId = (int) $user->current_organisation_id;
+
+        $validated = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'sku' => [
+                'nullable',
+                'string',
+                'max:100',
+                Rule::unique('inventory_items', 'sku')
+                    ->where(fn ($q) => $q->where('organisation_id', $orgId)),
+            ],
+            'description' => ['nullable', 'string'],
+            'is_active' => ['sometimes', 'boolean'],
+            'total_quantity' => ['required', 'integer', 'min:0', 'max:1000000'],
+        ]);
+
+        $item = DB::transaction(function () use ($validated, $orgId) {
+            $item = InventoryItem::create([
+                'organisation_id' => $orgId,
+                'name' => $validated['name'],
+                'sku' => $validated['sku'] ?? null,
+                'description' => $validated['description'] ?? null,
+                'is_active' => $validated['is_active'] ?? true,
+            ]);
+
+            $item->stock()->create([
+                'organisation_id' => $orgId,
+                'total_quantity' => $validated['total_quantity'],
+            ]);
+
+            return $item->load('stock');
+        });
+
         return response()->json([
-            'message' => 'No active organisation selected.',
-        ], 409);
+            'data' => $item,
+        ], 201);
     }
 
-    $validated = $request->validate([
-        'name' => ['required', 'string', 'max:255'],
-        'sku' => ['nullable', 'string', 'max:100'],
-        'description' => ['nullable', 'string'],
-        'is_active' => ['sometimes', 'boolean'],
-        'total_quantity' => ['required', 'integer', 'min:0', 'max:1000000'],
-    ]);
+    public function update(Request $request, $id)
+    {
+        $user = $request->user();
 
-    $orgId = (int) $user->current_organisation_id;
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
 
-    $item = \DB::transaction(function () use ($validated, $orgId) {
-        $item = \App\Models\InventoryItem::create([
-            'organisation_id' => $orgId,
-            'name' => $validated['name'],
-            'sku' => $validated['sku'] ?? null,
-            'description' => $validated['description'] ?? null,
-            'is_active' => $validated['is_active'] ?? true,
+        if (!$user->current_organisation_id) {
+            return response()->json([
+                'message' => 'No active organisation selected.',
+            ], 409);
+        }
+
+        $item = InventoryItem::query()
+            ->where('organisation_id', $user->current_organisation_id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $validated = $request->validate([
+            'name' => ['sometimes', 'string', 'max:255'],
+            'sku' => [
+                'nullable',
+                'string',
+                'max:100',
+                Rule::unique('inventory_items', 'sku')
+                    ->where(fn ($q) => $q->where('organisation_id', $user->current_organisation_id))
+                    ->ignore($item->id),
+            ],
+            'description' => ['nullable', 'string'],
+            'is_active' => ['sometimes', 'boolean'],
+            'total_quantity' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
         ]);
 
-        $item->stock()->create([
-            'organisation_id' => $orgId,
-            'total_quantity' => $validated['total_quantity'],
+        DB::transaction(function () use ($item, $validated, $user) {
+            $item->update(collect($validated)->except('total_quantity')->toArray());
+
+            if (array_key_exists('total_quantity', $validated)) {
+                $item->stock()->updateOrCreate(
+                    [
+                        'organisation_id' => $user->current_organisation_id,
+                        'inventory_item_id' => $item->id,
+                    ],
+                    [
+                        'total_quantity' => $validated['total_quantity'],
+                    ]
+                );
+            }
+        });
+
+        return response()->json([
+            'data' => $item->load('stock'),
         ]);
+    }
 
-        return $item->load('stock');
-    });
+    public function destroy(Request $request, $id)
+    {
+        $user = $request->user();
 
-    return response()->json([
-        'data' => $item,
-    ], 201);
-}
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
 
+        if (!$user->current_organisation_id) {
+            return response()->json([
+                'message' => 'No active organisation selected.',
+            ], 409);
+        }
+
+        $item = InventoryItem::query()
+            ->where('organisation_id', $user->current_organisation_id)
+            ->where('id', $id)
+            ->firstOrFail();
+
+        $item->delete();
+
+        return response()->noContent();
+    }
 }
