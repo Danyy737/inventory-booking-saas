@@ -27,6 +27,8 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     // Packages
     Route::get('/packages', [PackageController::class, 'index']);
     Route::post('/packages', [PackageController::class, 'store']);
+    Route::patch('/packages/{id}', [PackageController::class, 'update']);
+
 
 });
 
