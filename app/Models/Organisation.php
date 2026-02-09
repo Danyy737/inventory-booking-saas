@@ -28,4 +28,10 @@ class Organisation extends Model
     {
         return $this->hasMany(InventoryItem::class);
     }
+
+    public function packages()
+{
+    return $this->hasMany(Package::class);
+}
+
 }
