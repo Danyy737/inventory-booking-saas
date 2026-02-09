@@ -28,6 +28,10 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/packages', [PackageController::class, 'index']);
     Route::post('/packages', [PackageController::class, 'store']);
     Route::patch('/packages/{id}', [PackageController::class, 'update']);
+    Route::get('/packages/{id}', [PackageController::class, 'show']);
+    Route::put('/packages/{id}/items', [PackageController::class, 'updateItems']);
+
+
 
 
 });
