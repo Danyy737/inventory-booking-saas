@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\InventoryController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\BookingController;
+use App\Http\Controllers\Api\PackageController;
 
 Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
 
@@ -22,6 +23,11 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/bookings', [BookingController::class, 'store']);
     Route::patch('/bookings/{id}', [BookingController::class, 'update']);
     Route::patch('/bookings/{id}/cancel', [BookingController::class, 'cancel']);
+
+    // Packages
+    Route::get('/packages', [PackageController::class, 'index']);
+    Route::post('/packages', [PackageController::class, 'store']);
+
 });
 
 // Public / internal health check (keep public)
