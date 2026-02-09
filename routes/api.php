@@ -30,10 +30,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::patch('/packages/{id}', [PackageController::class, 'update']);
     Route::get('/packages/{id}', [PackageController::class, 'show']);
     Route::put('/packages/{id}/items', [PackageController::class, 'updateItems']);
-
-
-
-
+    Route::post('/packages/check-availability', [PackageController::class, 'checkAvailability']);
 });
 
 // Public / internal health check (keep public)

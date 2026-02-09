@@ -8,6 +8,8 @@ use Illuminate\Validation\Rule;
 use App\Models\Package;
 use App\Support\OrgRole;
 use Illuminate\Support\Facades\DB;
+use App\Models\InventoryReservation;
+use App\Models\InventoryStock;
 
 
 class PackageController extends Controller
@@ -154,4 +156,82 @@ public function updateItems(Request $request, int $id)
 
     return response()->json(['data' => $package]);
 }
+
+public function checkAvailability(Request $request)
+{
+    $org = $request->attributes->get('currentOrganisation');
+
+    $validated = $request->validate([
+        'package_id' => [
+            'required',
+            'integer',
+            Rule::exists('packages', 'id')->where(fn ($q) =>
+                $q->where('organisation_id', $org->id)
+            ),
+        ],
+        'start_at' => ['required', 'date'],
+        'end_at' => ['required', 'date', 'after:start_at'],
+    ]);
+
+    $startAt = $validated['start_at'];
+    $endAt = $validated['end_at'];
+
+    $package = Package::where('organisation_id', $org->id)
+        ->with(['packageItems'])
+        ->findOrFail($validated['package_id']);
+
+    if ($package->packageItems->isEmpty()) {
+        return response()->json([
+            'available' => false,
+            'message' => 'Package has no items.',
+            'missing_items' => [],
+        ], 422);
+    }
+
+    $missing = [];
+    $breakdown = [];
+
+    foreach ($package->packageItems as $pi) {
+        $itemId = $pi->inventory_item_id;
+        $required = (int) $pi->quantity;
+
+        $stock = InventoryStock::where('organisation_id', $org->id)
+            ->where('inventory_item_id', $itemId)
+            ->first();
+
+        $total = (int) ($stock?->total_quantity ?? 0);
+
+        $reserved = (int) InventoryReservation::where('organisation_id', $org->id)
+            ->where('inventory_item_id', $itemId)
+            ->where('status', 'active')
+            ->where('start_at', '<', $endAt)   // overlap rule
+            ->where('end_at', '>', $startAt)   // overlap rule
+            ->sum('reserved_quantity');
+
+        $availableQty = max(0, $total - $reserved);
+
+        $breakdown[] = [
+            'inventory_item_id' => $itemId,
+            'required' => $required,
+            'total' => $total,
+            'reserved' => $reserved,
+            'available' => $availableQty,
+        ];
+
+        if ($availableQty < $required) {
+            $missing[] = [
+                'inventory_item_id' => $itemId,
+                'required' => $required,
+                'available' => $availableQty,
+            ];
+        }
+    }
+
+    return response()->json([
+        'available' => count($missing) === 0,
+        'missing_items' => $missing,
+        'breakdown' => $breakdown,
+    ]);
+}
+
 }
