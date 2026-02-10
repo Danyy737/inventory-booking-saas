@@ -8,6 +8,7 @@ use App\Models\InventoryItem;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Support\OrgRole;
+use App\Models\Package;
 
 class BookingController extends Controller
 {
@@ -58,13 +59,53 @@ class BookingController extends Controller
 
         $orgId = (int) $user->current_organisation_id;
 
-        $validated = $request->validate([
-            'start_at' => ['required', 'date'],
-            'end_at' => ['required', 'date', 'after:start_at'],
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.inventory_item_id' => ['required', 'integer'],
-            'items.*.quantity' => ['required', 'integer', 'min:1'],
-        ]);
+     $validated = $request->validate([
+    'start_at' => ['required', 'date'],
+    'end_at' => ['required', 'date', 'after:start_at'],
+
+    'items' => ['sometimes', 'array'],
+    'items.*.inventory_item_id' => ['required_with:items', 'integer'],
+    'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
+
+    'packages' => ['sometimes', 'array'],
+    'packages.*.package_id' => ['required_with:packages', 'integer'],
+    'packages.*.quantity' => ['required_with:packages', 'integer', 'min:1'],
+]);
+
+if (empty($validated['items']) && empty($validated['packages'])) {
+    return response()->json(['message' => 'At least one item or package must be provided'], 422);
+}
+
+$mergedItems = [];
+
+/* Existing direct items */
+foreach ($validated['items'] ?? [] as $row) {
+    $mergedItems[$row['inventory_item_id']] =
+        ($mergedItems[$row['inventory_item_id']] ?? 0) + $row['quantity'];
+}
+
+/* Expand packages */
+foreach ($validated['packages'] ?? [] as $pkgRow) {
+
+    $package = Package::where('organisation_id', $orgId)
+        ->with('packageItems')
+        ->findOrFail($pkgRow['package_id']);
+
+    foreach ($package->packageItems as $pi) {
+        $mergedItems[$pi->inventory_item_id] =
+            ($mergedItems[$pi->inventory_item_id] ?? 0)
+            + ($pi->quantity * $pkgRow['quantity']);
+    }
+}
+
+/* Convert merged map back to list */
+$validated['items'] = collect($mergedItems)->map(function ($qty, $itemId) {
+    return [
+        'inventory_item_id' => $itemId,
+        'quantity' => $qty,
+    ];
+})->values()->all();
+
 
         $booking = DB::transaction(function () use ($validated, $orgId) {
             $booking = Booking::create([
