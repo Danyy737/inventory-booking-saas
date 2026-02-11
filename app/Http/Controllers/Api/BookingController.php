@@ -9,6 +9,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Support\OrgRole;
 use App\Models\Package;
+use App\Models\InventoryReservation;
+
 
 class BookingController extends Controller
 {
@@ -193,4 +195,44 @@ $validated['items'] = collect($mergedItems)->map(function ($qty, $itemId) {
 
         return response()->json(['data' => $booking->fresh()->load('reservations')]);
     }
+
+public function packingList(int $bookingId)
+{
+    $orgId = auth()->user()->current_organisation_id;
+
+    // Tenant-safe booking lookup
+    $booking = Booking::query()
+        ->where('organisation_id', $orgId)
+        ->findOrFail($bookingId);
+
+    // Aggregate reservations
+    $rows = InventoryReservation::query()
+        ->where('booking_id', $booking->id)
+        ->where('organisation_id', $orgId)
+        ->selectRaw('inventory_item_id, SUM(reserved_quantity) as required_quantity')
+        ->groupBy('inventory_item_id')
+        ->with('item:id,name')
+        ->get();
+
+    $packingList = $rows->map(fn ($r) => [
+        'inventory_item_id' => $r->inventory_item_id,
+        'name' => optional($r->item)->name,
+        'required_quantity' => (int) $r->required_quantity,
+    ])->values();
+
+    return response()->json([
+        'booking' => [
+            'id' => $booking->id,
+            'status' => $booking->status,
+            'start_at' => $booking->start_at,
+            'end_at' => $booking->end_at,
+        ],
+        'packing_list' => $packingList,
+        'summary' => [
+            'unique_items' => $packingList->count(),
+            'total_units' => $packingList->sum('required_quantity'),
+        ],
+    ]);
+}
+
 }

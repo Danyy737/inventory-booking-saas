@@ -23,6 +23,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/bookings', [BookingController::class, 'store']);
     Route::patch('/bookings/{id}', [BookingController::class, 'update']);
     Route::patch('/bookings/{id}/cancel', [BookingController::class, 'cancel']);
+    Route::get('/bookings/{booking}/packing-list', [BookingController::class, 'packingList']);
 
     // Packages
     Route::get('/packages', [PackageController::class, 'index']);
@@ -35,4 +36,3 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
 
 // Public / internal health check (keep public)
 Route::get('/health', fn () => response()->json(['ok' => true]));
-
