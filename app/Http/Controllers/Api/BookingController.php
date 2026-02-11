@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use App\Support\OrgRole;
 use App\Models\Package;
 use App\Models\InventoryReservation;
+use App\Http\Requests\PreviewBookingAvailabilityRequest;
 
 
 class BookingController extends Controller
@@ -234,5 +235,124 @@ public function packingList(int $bookingId)
         ],
     ]);
 }
+public function previewAvailability(PreviewBookingAvailabilityRequest $request)
+{
+    $data = $request->validated();
+    $orgId = auth()->user()->current_organisation_id;
+
+    // required: [inventory_item_id => total_required_qty]
+    $required = [];
+
+    // A) Expand packages into required inventory items
+    foreach (($data['packages'] ?? []) as $p) {
+        $packageId = (int) $p['package_id'];
+        $packageQty = (int) $p['quantity'];
+
+        $package = Package::query()
+            ->where('organisation_id', $orgId)
+            ->with('packageItems')
+            ->findOrFail($packageId);
+
+        foreach ($package->packageItems as $pi) {
+            $itemId = (int) $pi->inventory_item_id;
+            $qty = (int) $pi->quantity * $packageQty;
+
+            $required[$itemId] = ($required[$itemId] ?? 0) + $qty;
+        }
+    }
+
+    // B) Merge add-on items into the same requirements map
+    foreach (($data['items'] ?? []) as $i) {
+        $itemId = (int) $i['inventory_item_id'];
+        $qty = (int) $i['quantity'];
+
+        $required[$itemId] = ($required[$itemId] ?? 0) + $qty;
+    }
+
+    // If nothing required, return early (avoids empty whereIn edge cases)
+    if (empty($required)) {
+        return response()->json([
+            'available' => true,
+            'window' => [
+                'start_at' => $data['start_at'],
+                'end_at' => $data['end_at'],
+            ],
+            'requirements' => [],
+            'availability' => [],
+            'shortages' => [],
+        ]);
+    }
+
+    // Load names for output (tenant-safe)
+    $itemsById = InventoryItem::query()
+        ->where('organisation_id', $orgId)
+        ->whereIn('id', array_keys($required))
+        ->get(['id', 'name'])
+        ->keyBy('id');
+
+    $requirements = collect($required)->map(function ($qty, $itemId) use ($itemsById) {
+        return [
+            'inventory_item_id' => (int) $itemId,
+            'name' => $itemsById->get((int) $itemId)?->name,
+            'required_quantity' => (int) $qty,
+        ];
+    })->values();
+
+    // Phase 3: compute availability + shortages using overlap rule
+    $startAt = $data['start_at'];
+    $endAt = $data['end_at'];
+
+    $availability = $requirements->map(function ($req) use ($orgId, $startAt, $endAt) {
+        $itemId = (int) $req['inventory_item_id'];
+        $requiredQty = (int) $req['required_quantity'];
+
+        $item = InventoryItem::query()
+            ->where('organisation_id', $orgId)
+            ->where('id', $itemId)
+            ->with('stock')
+            ->firstOrFail();
+
+        $total = (int) optional($item->stock)->total_quantity;
+
+        $reserved = (int) $item->reservations()
+            ->where('organisation_id', $orgId)
+            ->where('status', 'active')
+            ->where('start_at', '<', $endAt)
+            ->where('end_at', '>', $startAt)
+            ->sum('reserved_quantity');
+
+        $availableQty = max(0, $total - $reserved);
+        $shortBy = max(0, $requiredQty - $availableQty);
+
+        return [
+            'inventory_item_id' => $itemId,
+            'name' => $req['name'],
+            'required_quantity' => $requiredQty,
+            'available_quantity' => $availableQty,
+            'short_by' => $shortBy,
+        ];
+    })->values();
+
+    $shortages = $availability->filter(fn ($row) => $row['short_by'] > 0)->values();
+    $isAvailable = $shortages->isEmpty();
+
+    return response()->json([
+        'available' => $isAvailable,
+        'window' => [
+            'start_at' => $data['start_at'],
+            'end_at' => $data['end_at'],
+        ],
+        'requirements' => $requirements,
+        'availability' => $availability,
+        'shortages' => $shortages,
+    ]);
+}
+
+
+
+
+
+
+
 
 }

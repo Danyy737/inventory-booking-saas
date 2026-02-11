@@ -24,6 +24,8 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::patch('/bookings/{id}', [BookingController::class, 'update']);
     Route::patch('/bookings/{id}/cancel', [BookingController::class, 'cancel']);
     Route::get('/bookings/{booking}/packing-list', [BookingController::class, 'packingList']);
+    Route::post('/bookings/preview-availability', [BookingController::class, 'previewAvailability']);
+
 
     // Packages
     Route::get('/packages', [PackageController::class, 'index']);
