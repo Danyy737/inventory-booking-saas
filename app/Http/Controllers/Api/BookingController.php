@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use App\Support\OrgRole;
 use App\Models\Package;
 use App\Models\InventoryReservation;
+use App\Services\AvailabilityService;
 use App\Http\Requests\PreviewBookingAvailabilityRequest;
 
 
@@ -55,121 +56,104 @@ class BookingController extends Controller
         return response()->json(['data' => $booking]);
     }
 
-    public function store(Request $request)
-    {
-        $user = $request->user();
-        $this->ensureAdminLike($user);
+public function store(Request $request)
+{
+    $user = $request->user();
+    $this->ensureAdminLike($user);
 
-        $orgId = (int) $user->current_organisation_id;
+    $orgId = (int) $user->current_organisation_id;
 
-     $validated = $request->validate([
-    'start_at' => ['required', 'date'],
-    'end_at' => ['required', 'date', 'after:start_at'],
+    $validated = $request->validate([
+        'start_at' => ['required', 'date'],
+        'end_at' => ['required', 'date', 'after:start_at'],
 
-    'items' => ['sometimes', 'array'],
-    'items.*.inventory_item_id' => ['required_with:items', 'integer'],
-    'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
+        'items' => ['sometimes', 'array'],
+        'items.*.inventory_item_id' => ['required_with:items', 'integer'],
+        'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
 
-    'packages' => ['sometimes', 'array'],
-    'packages.*.package_id' => ['required_with:packages', 'integer'],
-    'packages.*.quantity' => ['required_with:packages', 'integer', 'min:1'],
-]);
+        'packages' => ['sometimes', 'array'],
+        'packages.*.package_id' => ['required_with:packages', 'integer'],
+        'packages.*.quantity' => ['required_with:packages', 'integer', 'min:1'],
+    ]);
 
-if (empty($validated['items']) && empty($validated['packages'])) {
-    return response()->json(['message' => 'At least one item or package must be provided'], 422);
-}
-
-$mergedItems = [];
-
-/* Existing direct items */
-foreach ($validated['items'] ?? [] as $row) {
-    $mergedItems[$row['inventory_item_id']] =
-        ($mergedItems[$row['inventory_item_id']] ?? 0) + $row['quantity'];
-}
-
-/* Expand packages */
-foreach ($validated['packages'] ?? [] as $pkgRow) {
-
-    $package = Package::where('organisation_id', $orgId)
-        ->with('packageItems')
-        ->findOrFail($pkgRow['package_id']);
-
-    foreach ($package->packageItems as $pi) {
-        $mergedItems[$pi->inventory_item_id] =
-            ($mergedItems[$pi->inventory_item_id] ?? 0)
-            + ($pi->quantity * $pkgRow['quantity']);
+    if (empty($validated['items']) && empty($validated['packages'])) {
+        return response()->json(['message' => 'At least one item or package must be provided'], 422);
     }
-}
 
-/* Convert merged map back to list */
-$validated['items'] = collect($mergedItems)->map(function ($qty, $itemId) {
-    return [
-        'inventory_item_id' => $itemId,
-        'quantity' => $qty,
-    ];
-})->values()->all();
+    // 1) Merge direct items + expanded packages into a single requirements map
+    $required = []; // [inventory_item_id => required_qty]
 
+    foreach (($validated['items'] ?? []) as $row) {
+        $itemId = (int) $row['inventory_item_id'];
+        $qty = (int) $row['quantity'];
+        $required[$itemId] = ($required[$itemId] ?? 0) + $qty;
+    }
 
-        $booking = DB::transaction(function () use ($validated, $orgId) {
-            $booking = Booking::create([
+    foreach (($validated['packages'] ?? []) as $pkgRow) {
+        $package = Package::query()
+            ->where('organisation_id', $orgId)
+            ->with('packageItems')
+            ->findOrFail((int) $pkgRow['package_id']);
+
+        $packageQty = (int) $pkgRow['quantity'];
+
+        foreach ($package->packageItems as $pi) {
+            $itemId = (int) $pi->inventory_item_id;
+            $qty = (int) $pi->quantity * $packageQty;
+            $required[$itemId] = ($required[$itemId] ?? 0) + $qty;
+        }
+    }
+
+    if (empty($required)) {
+        return response()->json(['message' => 'At least one item or package must be provided'], 422);
+    }
+
+    // 2) Single source of truth availability check
+    $check = app(AvailabilityService::class)->check(
+        $orgId,
+        $validated['start_at'],
+        $validated['end_at'],
+        $required
+    );
+
+    if (!$check['available']) {
+        return response()->json([
+            'message' => 'Insufficient availability',
+            'shortages' => $check['shortages'],
+        ], 409);
+    }
+
+    // 3) Create booking + reservations transactionally
+    $booking = DB::transaction(function () use ($validated, $orgId, $required) {
+        $booking = Booking::create([
+            'organisation_id' => $orgId,
+            'start_at' => $validated['start_at'],
+            'end_at' => $validated['end_at'],
+            'status' => 'confirmed',
+        ]);
+
+        foreach ($required as $itemId => $qty) {
+            $item = InventoryItem::query()
+                ->where('organisation_id', $orgId)
+                ->where('id', (int) $itemId)
+                ->firstOrFail();
+
+            $item->reservations()->create([
                 'organisation_id' => $orgId,
+                'booking_id' => $booking->id,
+                'reserved_quantity' => (int) $qty,
                 'start_at' => $validated['start_at'],
                 'end_at' => $validated['end_at'],
-                'status' => 'confirmed',
+                'status' => 'active',
             ]);
-
-            foreach ($validated['items'] as $row) {
-                $item = InventoryItem::where('organisation_id', $orgId)
-                    ->where('id', $row['inventory_item_id'])
-                    ->with('stock')
-                    ->firstOrFail();
-
-                $total = (int) optional($item->stock)->total_quantity;
-
-                $reserved = (int) $item->reservations()
-                    ->where('organisation_id', $orgId)
-                    ->where('status', 'active')
-                    ->where('start_at', '<', $validated['end_at'])
-                    ->where('end_at', '>', $validated['start_at'])
-                    ->sum('reserved_quantity');
-
-                if (($total - $reserved) < $row['quantity']) {
-                    abort(response()->json(['message' => 'Insufficient availability'], 409));
-                }
-
-                $item->reservations()->create([
-                    'organisation_id' => $orgId,
-                    'booking_id' => $booking->id,
-                    'reserved_quantity' => $row['quantity'],
-                    'start_at' => $validated['start_at'],
-                    'end_at' => $validated['end_at'],
-                    'status' => 'active',
-                ]);
-            }
-
-            return $booking->load('reservations.item');
-        });
-
-        return response()->json(['data' => $booking], 201);
-    }
-
-    public function update(Request $request, $id)
-    {
-        $user = $request->user();
-        $this->ensureAdminLike($user);
-
-        $booking = Booking::where('organisation_id', $user->current_organisation_id)
-            ->where('id', $id)
-            ->with('reservations')
-            ->firstOrFail();
-
-        if ($booking->status === 'cancelled' || $booking->end_at->isPast()) {
-            return response()->json(['message' => 'This booking cannot be edited.'], 422);
         }
 
-        // (logic unchanged – you already implemented this correctly)
-        return $this->store($request); // reuse logic if you want, or keep your existing update body
-    }
+        return $booking->load('reservations.item');
+    });
+
+    return response()->json(['data' => $booking], 201);
+}
+
 
     public function cancel(Request $request, $id)
     {
@@ -238,7 +222,7 @@ public function packingList(int $bookingId)
 public function previewAvailability(PreviewBookingAvailabilityRequest $request)
 {
     $data = $request->validated();
-    $orgId = auth()->user()->current_organisation_id;
+    $orgId = (int) auth()->user()->current_organisation_id;
 
     // required: [inventory_item_id => total_required_qty]
     $required = [];
@@ -269,7 +253,7 @@ public function previewAvailability(PreviewBookingAvailabilityRequest $request)
         $required[$itemId] = ($required[$itemId] ?? 0) + $qty;
     }
 
-    // If nothing required, return early (avoids empty whereIn edge cases)
+    // If nothing required, return early
     if (empty($required)) {
         return response()->json([
             'available' => true,
@@ -298,46 +282,43 @@ public function previewAvailability(PreviewBookingAvailabilityRequest $request)
         ];
     })->values();
 
-    // Phase 3: compute availability + shortages using overlap rule
-    $startAt = $data['start_at'];
-    $endAt = $data['end_at'];
+    // Phase 3 via shared engine
+    $result = app(AvailabilityService::class)->check(
+        $orgId,
+        $data['start_at'],
+        $data['end_at'],
+        $required
+    );
 
-    $availability = $requirements->map(function ($req) use ($orgId, $startAt, $endAt) {
-        $itemId = (int) $req['inventory_item_id'];
-        $requiredQty = (int) $req['required_quantity'];
+    // Attach names to engine output
+    $names = $requirements->keyBy('inventory_item_id');
 
-        $item = InventoryItem::query()
-            ->where('organisation_id', $orgId)
-            ->where('id', $itemId)
-            ->with('stock')
-            ->firstOrFail();
-
-        $total = (int) optional($item->stock)->total_quantity;
-
-        $reserved = (int) $item->reservations()
-            ->where('organisation_id', $orgId)
-            ->where('status', 'active')
-            ->where('start_at', '<', $endAt)
-            ->where('end_at', '>', $startAt)
-            ->sum('reserved_quantity');
-
-        $availableQty = max(0, $total - $reserved);
-        $shortBy = max(0, $requiredQty - $availableQty);
+    $availability = collect($result['availability'])->map(function ($row) use ($names) {
+        $name = $names->get((int) $row['inventory_item_id'])['name'] ?? null;
 
         return [
-            'inventory_item_id' => $itemId,
-            'name' => $req['name'],
-            'required_quantity' => $requiredQty,
-            'available_quantity' => $availableQty,
-            'short_by' => $shortBy,
+            'inventory_item_id' => (int) $row['inventory_item_id'],
+            'name' => $name,
+            'required_quantity' => (int) $row['required_quantity'],
+            'available_quantity' => (int) $row['available_quantity'],
+            'short_by' => (int) $row['short_by'],
         ];
     })->values();
 
-    $shortages = $availability->filter(fn ($row) => $row['short_by'] > 0)->values();
-    $isAvailable = $shortages->isEmpty();
+    $shortages = collect($result['shortages'])->map(function ($row) use ($names) {
+        $name = $names->get((int) $row['inventory_item_id'])['name'] ?? null;
+
+        return [
+            'inventory_item_id' => (int) $row['inventory_item_id'],
+            'name' => $name,
+            'required_quantity' => (int) $row['required_quantity'],
+            'available_quantity' => (int) $row['available_quantity'],
+            'short_by' => (int) $row['short_by'],
+        ];
+    })->values();
 
     return response()->json([
-        'available' => $isAvailable,
+        'available' => (bool) $result['available'],
         'window' => [
             'start_at' => $data['start_at'],
             'end_at' => $data['end_at'],
@@ -347,6 +328,7 @@ public function previewAvailability(PreviewBookingAvailabilityRequest $request)
         'shortages' => $shortages,
     ]);
 }
+
 
 
 
