@@ -88,4 +88,53 @@ class StoreBookingTest extends TestCase
             'status' => 'active',
         ]);
     }
+
+    public function test_store_returns_409_and_creates_nothing_when_unavailable(): void
+{
+    // --- Arrange: tenant + auth ---
+    $org = Organisation::factory()->create();
+
+    $user = User::factory()->create([
+        'current_organisation_id' => $org->id,
+    ]);
+
+    $org->users()->attach($user->id, ['role' => 'owner']);
+
+    Sanctum::actingAs($user);
+
+    // --- Arrange: inventory + limited stock ---
+    $item = InventoryItem::factory()->create([
+        'organisation_id' => $org->id,
+    ]);
+
+    InventoryStock::factory()->create([
+        'organisation_id'   => $org->id,
+        'inventory_item_id' => $item->id,
+        'total_quantity'    => 5,
+    ]);
+
+    $payload = [
+        'start_at' => '2026-02-22T10:00:00Z',
+        'end_at'   => '2026-02-22T14:00:00Z',
+        'packages' => [],
+        'items' => [
+            [
+                'inventory_item_id' => $item->id,
+                'quantity' => 7, // more than stock
+            ],
+        ],
+    ];
+
+    // --- Act ---
+    $res = $this->postJson('/api/bookings', $payload);
+
+    // --- Assert: response ---
+    $res->assertStatus(409);
+    $res->assertJsonPath('message', 'Insufficient availability');
+
+    // --- Assert: nothing written ---
+    $this->assertDatabaseCount('bookings', 0);
+    $this->assertDatabaseCount('inventory_reservations', 0);
+}
+
 }
