@@ -1,0 +1,61 @@
+<?php
+
+namespace Tests\Feature\Auth;
+
+use Tests\TestCase;
+use Laravel\Sanctum\Sanctum;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+use App\Models\User;
+use App\Models\Organisation;
+use App\Models\InventoryItem;
+use App\Models\InventoryStock;
+
+class RoleEnforcementTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_staff_cannot_create_bookings(): void
+    {
+        $start = '2026-02-27T10:00:00Z';
+        $end   = '2026-02-27T14:00:00Z';
+
+        // --- Arrange: org + STAFF user ---
+        $org = Organisation::factory()->create();
+
+        $user = User::factory()->create([
+            'current_organisation_id' => $org->id,
+        ]);
+
+        $org->users()->attach($user->id, ['role' => 'staff']);
+        Sanctum::actingAs($user);
+
+        // Create an item + stock so the request would otherwise be valid
+        $item = InventoryItem::factory()->create([
+            'organisation_id' => $org->id,
+        ]);
+
+        InventoryStock::factory()->create([
+            'organisation_id'   => $org->id,
+            'inventory_item_id' => $item->id,
+            'total_quantity'    => 10,
+        ]);
+
+        // --- Act: staff tries to store booking ---
+        $res = $this->postJson('/api/bookings', [
+            'start_at' => $start,
+            'end_at'   => $end,
+            'packages' => [],
+            'items' => [
+                ['inventory_item_id' => $item->id, 'quantity' => 1],
+            ],
+        ]);
+
+        // --- Assert: forbidden ---
+        $res->assertForbidden();
+
+        // Ensure nothing was written
+        $this->assertDatabaseCount('bookings', 0);
+        $this->assertDatabaseCount('inventory_reservations', 0);
+    }
+}
