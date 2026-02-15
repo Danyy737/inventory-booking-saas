@@ -170,6 +170,7 @@ class BookingController extends Controller
         $rows = InventoryReservation::query()
             ->where('booking_id', $booking->id)
             ->where('organisation_id', $orgId)
+            ->where('status', 'active')
             ->selectRaw('inventory_item_id, SUM(reserved_quantity) as required_quantity')
             ->groupBy('inventory_item_id')
             ->with('item:id,name')
@@ -278,4 +279,92 @@ class BookingController extends Controller
             'shortages' => $shortages,
         ]);
     }
+
+    public function update(Request $request, $id)
+{
+    $user = $request->user();
+    $this->ensureAdminLike($user);
+
+    $orgId = (int) $user->current_organisation_id;
+
+    $booking = Booking::query()
+        ->where('organisation_id', $orgId)
+        ->with('reservations')
+        ->findOrFail($id);
+
+    if ($booking->status === 'cancelled') {
+        return response()->json(['message' => 'Cancelled bookings cannot be updated.'], 422);
+    }
+
+    $validated = $request->validate([
+        'start_at' => ['required', 'date'],
+        'end_at' => ['required', 'date', 'after:start_at'],
+
+        'items' => ['sometimes', 'array'],
+        'items.*.inventory_item_id' => ['required_with:items', 'integer'],
+        'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
+
+        'packages' => ['sometimes', 'array'],
+        'packages.*.package_id' => ['required_with:packages', 'integer'],
+        'packages.*.quantity' => ['required_with:packages', 'integer', 'min:1'],
+    ]);
+
+    if (empty($validated['items']) && empty($validated['packages'])) {
+        return response()->json(['message' => 'At least one item or package must be provided'], 422);
+    }
+
+    $required = app(RequirementBuilder::class)->build($orgId, $validated);
+
+    if (empty($required)) {
+        return response()->json(['message' => 'At least one item or package must be provided'], 422);
+    }
+
+    // Availability check EXCLUDING this booking’s existing reservations
+    $check = app(AvailabilityService::class)->check(
+        $orgId,
+        $validated['start_at'],
+        $validated['end_at'],
+        $required,
+        (int) $booking->id
+    );
+
+    if (!$check['available']) {
+        return response()->json([
+            'message' => 'Insufficient availability',
+            'shortages' => $check['shortages'],
+        ], 409);
+    }
+
+    $updated = DB::transaction(function () use ($booking, $validated, $orgId, $required) {
+        $booking->update([
+            'start_at' => $validated['start_at'],
+            'end_at' => $validated['end_at'],
+        ]);
+
+        // Cancel old reservations so they no longer count
+        $booking->reservations()->update(['status' => 'cancelled']);
+
+        // Create fresh active reservations from the new requirements
+        foreach ($required as $itemId => $qty) {
+            $item = InventoryItem::query()
+                ->where('organisation_id', $orgId)
+                ->where('id', (int) $itemId)
+                ->firstOrFail();
+
+            $item->reservations()->create([
+                'organisation_id' => $orgId,
+                'booking_id' => $booking->id,
+                'reserved_quantity' => (int) $qty,
+                'start_at' => $validated['start_at'],
+                'end_at' => $validated['end_at'],
+                'status' => 'active',
+            ]);
+        }
+
+        return $booking->fresh()->load('reservations.item');
+    });
+
+    return response()->json(['data' => $updated], 200);
+}
+
 }
