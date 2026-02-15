@@ -2,13 +2,21 @@
 
 use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\InventoryController;
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\PackageController;
+use App\Http\Controllers\Api\AuthController;
+use Illuminate\Support\Facades\Route;
 
+// PUBLIC routes (no token needed)
+Route::post('/auth/login', [AuthController::class, 'login']);
+Route::get('/health', fn () => response()->json(['ok' => true]));
+Route::get('/ping', fn () => response()->json(['ok' => true])); // optional
+
+// PROTECTED routes (token + tenant required)
 Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
-
     Route::get('/me', MeController::class);
+
+    Route::post('/auth/logout', [AuthController::class, 'logout']);
 
     // Inventory
     Route::get('/inventory/items', [InventoryController::class, 'index']);
@@ -26,7 +34,6 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/bookings/{booking}/packing-list', [BookingController::class, 'packingList']);
     Route::post('/bookings/preview-availability', [BookingController::class, 'previewAvailability']);
 
-
     // Packages
     Route::get('/packages', [PackageController::class, 'index']);
     Route::post('/packages', [PackageController::class, 'store']);
@@ -36,5 +43,3 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/packages/check-availability', [PackageController::class, 'checkAvailability']);
 });
 
-// Public / internal health check (keep public)
-Route::get('/health', fn () => response()->json(['ok' => true]));
