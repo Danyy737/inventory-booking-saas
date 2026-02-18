@@ -5,18 +5,46 @@ use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\BookingController;
 use App\Http\Controllers\Api\PackageController;
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\MyOrganisationsController;
 use Illuminate\Support\Facades\Route;
 
-// PUBLIC routes (no token needed)
+/*
+|--------------------------------------------------------------------------
+| PUBLIC ROUTES
+|--------------------------------------------------------------------------
+*/
+
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::get('/health', fn () => response()->json(['ok' => true]));
-Route::get('/ping', fn () => response()->json(['ok' => true])); // optional
+Route::get('/ping', fn () => response()->json(['ok' => true]));
 
-// PROTECTED routes (token + tenant required)
-Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
-    Route::get('/me', MeController::class);
+
+/*
+|--------------------------------------------------------------------------
+| AUTH-ONLY ROUTES (NO TENANT REQUIRED)
+|--------------------------------------------------------------------------
+*/
+
+Route::middleware('auth:sanctum')->group(function () {
+
+    // Identity
+    Route::get('/me', [MeController::class, 'show']);
+
+    // Organisation bootstrap
+    Route::get('/my/organisations', [MyOrganisationsController::class, 'index']);
+    Route::post('/me/select-organisation', [MeController::class, 'selectOrganisation']);
 
     Route::post('/auth/logout', [AuthController::class, 'logout']);
+});
+
+
+/*
+|--------------------------------------------------------------------------
+| TENANT ROUTES (AUTH + TENANT REQUIRED)
+|--------------------------------------------------------------------------
+*/
+
+Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
 
     // Inventory
     Route::get('/inventory/items', [InventoryController::class, 'index']);
@@ -42,4 +70,3 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::put('/packages/{id}/items', [PackageController::class, 'updateItems']);
     Route::post('/packages/check-availability', [PackageController::class, 'checkAvailability']);
 });
-

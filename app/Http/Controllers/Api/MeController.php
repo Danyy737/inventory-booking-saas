@@ -7,24 +7,30 @@ use Illuminate\Http\Request;
 
 class MeController extends Controller
 {
-    public function __invoke(Request $request)
+    /**
+     * Auth-only identity endpoint.
+     * Works even if no organisation is selected.
+     */
+    public function show(Request $request)
     {
         $user = $request->user();
 
-        if (!$user->current_organisation_id) {
-            return response()->json([
-                'message' => 'No active organisation selected.',
-            ], 409);
-        }
+        $currentOrg = null;
+        $role = null;
 
-        $organisation = $user->organisations()
-            ->whereKey($user->current_organisation_id)
-            ->first();
+        if ($user->current_organisation_id) {
+            $organisation = $user->organisations()
+                ->whereKey($user->current_organisation_id)
+                ->first();
 
-        if (!$organisation) {
-            return response()->json([
-                'message' => 'You are not a member of the active organisation.',
-            ], 403);
+            if ($organisation) {
+                $currentOrg = [
+                    'id' => $organisation->id,
+                    'name' => $organisation->name,
+                    'slug' => $organisation->slug,
+                ];
+                $role = $organisation->pivot->role ?? null;
+            }
         }
 
         return response()->json([
@@ -32,13 +38,37 @@ class MeController extends Controller
                 'id' => $user->id,
                 'name' => $user->name,
                 'email' => $user->email,
+                'current_organisation_id' => $user->current_organisation_id,
             ],
-            'current_organisation' => [
-                'id' => $organisation->id,
-                'name' => $organisation->name,
-                'slug' => $organisation->slug,
-            ],
-            'role' => $organisation->pivot->role,
+            'current_organisation' => $currentOrg,
+            'role' => $role,
         ]);
+    }
+
+    /**
+     * Auth-only endpoint to set the active organisation.
+     */
+    public function selectOrganisation(Request $request)
+    {
+        $validated = $request->validate([
+            'organisation_id' => ['required', 'integer', 'exists:organisations,id'],
+        ]);
+
+        $user = $request->user();
+        $orgId = (int) $validated['organisation_id'];
+
+        $organisation = $user->organisations()->whereKey($orgId)->first();
+
+        if (! $organisation) {
+            return response()->json([
+                'message' => 'You are not a member of this organisation.',
+                'code' => 'ORG_FORBIDDEN',
+            ], 403);
+        }
+
+        $user->current_organisation_id = $orgId;
+        $user->save();
+
+        return $this->show($request);
     }
 }
