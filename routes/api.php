@@ -18,7 +18,7 @@ use App\Http\Controllers\Api\OrganisationOnboardingController;
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::get('/health', fn () => response()->json(['ok' => true]));
 Route::get('/ping', fn () => response()->json(['ok' => true]));
-
+Route::post('/auth/register', [AuthController::class, 'register']);
 
 /*
 |--------------------------------------------------------------------------
@@ -35,7 +35,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/my/organisations', [MyOrganisationsController::class, 'index']);
     Route::post('/me/select-organisation', [MeController::class, 'selectOrganisation']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
-    Route::post('/auth/register', [AuthController::class, 'register']);
+    
+    
         // Onboarding: create/join organisation
     Route::post('/organisations', [OrganisationOnboardingController::class, 'store']);
     Route::post('/organisations/join', [OrganisationOnboardingController::class, 'join']);
