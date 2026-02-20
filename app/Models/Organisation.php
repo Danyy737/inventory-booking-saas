@@ -12,6 +12,8 @@ class Organisation extends Model
     protected $fillable = [
         'name',
         'slug',
+        'join_code',
+        'join_enabled',
     ];
 
     /**
@@ -39,4 +41,6 @@ class Organisation extends Model
     {
         return $this->hasMany(Package::class);
     }
+    
+    
 }

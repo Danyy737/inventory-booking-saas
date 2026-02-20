@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\PackageController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\MyOrganisationsController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\OrganisationOnboardingController;
 
 /*
 |--------------------------------------------------------------------------
@@ -33,8 +34,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // Organisation bootstrap
     Route::get('/my/organisations', [MyOrganisationsController::class, 'index']);
     Route::post('/me/select-organisation', [MeController::class, 'selectOrganisation']);
-
     Route::post('/auth/logout', [AuthController::class, 'logout']);
+    Route::post('/auth/register', [AuthController::class, 'register']);
+        // Onboarding: create/join organisation
+    Route::post('/organisations', [OrganisationOnboardingController::class, 'store']);
+    Route::post('/organisations/join', [OrganisationOnboardingController::class, 'join']);
+
 });
 
 
