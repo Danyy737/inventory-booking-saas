@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use App\Support\OrgRole;
+use Illuminate\Database\QueryException;
 
 class InventoryController extends Controller
 {
@@ -124,18 +125,26 @@ class InventoryController extends Controller
         return response()->json(['data' => $item->load('stock')]);
     }
 
-    public function destroy(Request $request, $id)
-    {
-        $user = $request->user();
-        $this->ensureAdminLike($user);
+public function destroy(Request $request, $id)
+{
+    $user = $request->user();
+    $this->ensureAdminLike($user);
 
-        InventoryItem::where('organisation_id', $user->current_organisation_id)
-            ->where('id', $id)
-            ->firstOrFail()
-            ->delete();
+    $item = InventoryItem::where('organisation_id', $user->current_organisation_id)
+        ->where('id', $id)
+        ->firstOrFail();
 
+    try {
+        $item->delete();
         return response()->noContent();
+    } catch (QueryException $e) {
+        // FK restrict (e.g. package_items references this item)
+        return response()->json([
+            'message' => 'Cannot delete this item because it is used in one or more packages. Remove it from those packages first.'
+        ], 409);
     }
+}
+
 
     public function checkAvailability(Request $request)
     {
