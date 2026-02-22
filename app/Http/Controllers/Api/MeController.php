@@ -28,6 +28,8 @@ class MeController extends Controller
                     'id' => $organisation->id,
                     'name' => $organisation->name,
                     'slug' => $organisation->slug,
+                    'join_code' => $organisation->join_code,
+                    'join_enabled' => $organisation->join_enabled,
                 ];
                 $role = $organisation->pivot->role ?? null;
             }
