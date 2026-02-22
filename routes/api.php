@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\MyOrganisationsController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\OrganisationOnboardingController;
+use App\Http\Controllers\Api\OrganisationMembersController;
 
 /*
 |--------------------------------------------------------------------------
@@ -75,4 +76,7 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::get('/packages/{id}', [PackageController::class, 'show']);
     Route::put('/packages/{id}/items', [PackageController::class, 'updateItems']);
     Route::post('/packages/check-availability', [PackageController::class, 'checkAvailability']);
+
+    Route::get('/organisations/members', [OrganisationMembersController::class, 'index']);
+
 });
