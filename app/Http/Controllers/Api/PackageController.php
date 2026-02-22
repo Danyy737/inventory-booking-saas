@@ -135,18 +135,37 @@ public function updateItems(Request $request, int $id)
         return response()->json(['message' => 'Duplicate inventory_item_id in items payload.'], 422);
     }
 
+    // ✅ NEW: Enforce package item quantity cannot exceed stock.total_quantity
+    $stockByItem = \App\Models\InventoryStock::where('organisation_id', $org->id)
+        ->whereIn('inventory_item_id', $ids->values()->all())
+        ->get()
+        ->keyBy('inventory_item_id');
+
+    foreach ($validated['items'] as $item) {
+        $itemId = (int) $item['inventory_item_id'];
+        $qty = (int) $item['quantity'];
+
+        $stockRow = $stockByItem->get($itemId);
+        $total = (int) ($stockRow?->total_quantity ?? 0);
+
+        if ($qty > $total) {
+            return response()->json([
+                'message' => "Quantity exceeds stock for inventory_item_id {$itemId}. Stock={$total}, requested={$qty}.",
+            ], 422);
+        }
+    }
+
     DB::transaction(function () use ($package, $validated) {
         // Replace-all strategy
         $package->packageItems()->delete();
 
-    $rows = collect($validated['items'])->map(fn ($item) => [
-    'package_id' => $package->id,
-    'inventory_item_id' => $item['inventory_item_id'],
-    'quantity' => $item['quantity'],
-    'created_at' => now(),
-    'updated_at' => now(),
-])->all();
-
+        $rows = collect($validated['items'])->map(fn ($item) => [
+            'package_id' => $package->id,
+            'inventory_item_id' => $item['inventory_item_id'],
+            'quantity' => $item['quantity'],
+            'created_at' => now(),
+            'updated_at' => now(),
+        ])->all();
 
         $package->packageItems()->insert($rows);
     });
@@ -156,6 +175,7 @@ public function updateItems(Request $request, int $id)
 
     return response()->json(['data' => $package]);
 }
+
 
 public function checkAvailability(Request $request)
 {
