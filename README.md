@@ -1,59 +1,205 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Inventory Booking SaaS
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A multi-tenant inventory and booking management system built with Laravel and React.
 
-## About Laravel
+This platform allows organisations to manage inventory, create packages, and handle bookings with real-time availability validation to prevent stock conflicts and double-booking.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Overview
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+Inventory Booking SaaS is designed for businesses such as event hire companies, equipment rental providers, and service operators that need to manage stock across overlapping bookings.
 
-## Learning Laravel
+The core objective of the system is:
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+> Ensure inventory is never double-booked across overlapping time windows.
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+The system enforces this using reservation logic, availability preview endpoints, and overlap detection rules.
 
-## Laravel Sponsors
+---
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+## Core Features
 
-### Premium Partners
+### Authentication & Multi-Tenancy
+- User registration and login (Laravel Sanctum)
+- Organisation creation and join via code
+- Organisation selection per user
+- Tenant isolation middleware
+- Role-based access (Owner / Staff)
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+### Inventory Management
+- Create, update, and delete inventory items
+- Track stock quantities per organisation
+- Tenant-scoped inventory isolation
 
-## Contributing
+### Packages
+- Create reusable item bundles
+- Update package contents
+- Expand packages into inventory requirements during availability checks
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+### Bookings
+- Create bookings with start and end date/time
+- Overlap detection between bookings
+- Reservation system per inventory item
+- Booking cancellation endpoint
+- Packing list generation per booking
 
-## Code of Conduct
+### Availability System
+- Standalone availability checker page
+- Booking preview availability endpoint
+- Required / Available / Shortage breakdown
+- Prevents booking when stock is insufficient
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+---
 
-## Security Vulnerabilities
+## Architecture
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### Backend
+- Laravel 10
+- Sanctum authentication
+- Tenant middleware
+- Reservation-based stock locking
+- Service-driven availability logic
 
-## License
+### Frontend
+- React
+- React Router
+- Axios API client
+- Auth context provider
+- Protected routes
+- Multi-tenant organisation selection
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+---
+
+## How It Works
+
+### Booking Flow
+
+1. User selects organisation.
+2. User creates a booking with start and end time.
+3. System:
+   - Finds overlapping bookings.
+   - Calculates reserved quantities per inventory item.
+   - Compares against total stock.
+4. If sufficient stock exists → booking is confirmed.
+5. If insufficient stock exists → 409 conflict response returned.
+
+---
+
+### Reservation System
+
+When a booking is confirmed:
+- Each inventory item is stored as a reservation.
+- Availability checks subtract existing reservations.
+- Overlapping bookings are detected using time comparison logic.
+
+Overlap rule:
+
+```
+existing.start < new.end
+AND
+existing.end > new.start
+```
+
+This ensures inventory cannot be double-booked across overlapping time windows.
+
+---
+
+## Tech Stack
+
+### Backend
+- PHP
+- Laravel
+- MySQL
+- Sanctum
+
+### Frontend
+- React
+- React Router
+- Axios
+
+---
+
+## API Overview
+
+### Inventory
+- GET /inventory/items
+- POST /inventory/items
+- PATCH /inventory/items/{id}
+- DELETE /inventory/items/{id}
+- POST /inventory/check-availability
+
+### Bookings
+- GET /bookings
+- GET /bookings/{id}
+- POST /bookings
+- PATCH /bookings/{id}
+- PATCH /bookings/{id}/cancel
+- GET /bookings/{id}/packing-list
+- POST /bookings/preview-availability
+
+### Packages
+- GET /packages
+- GET /packages/{id}
+- POST /packages
+- PATCH /packages/{id}
+- PUT /packages/{id}/items
+- POST /packages/check-availability
+
+---
+
+## Installation
+
+### Backend Setup
+
+```
+git clone <repository-url>
+cd backend
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
+php artisan serve
+```
+
+### Frontend Setup
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+---
+
+## Project Status
+
+MVP Complete.
+
+The system currently supports:
+- Multi-tenant inventory isolation
+- Real-time availability validation
+- Reservation-based booking conflict prevention
+- Package expansion logic
+- Standalone availability checking
+- Booking packing lists
+
+---
+
+## Roadmap (Future Enhancements)
+
+- Package addons
+- Booking lifecycle states (draft / confirmed / completed)
+- Damage and return tracking
+- Calendar view UI
+- Reporting dashboard
+- Public availability checking
+- Docker-based deployment
+
+---
+
+## Author
+
+Daniel Mourad
+
+Multi-tenant SaaS architecture project built to demonstrate backend design, booking conflict resolution logic, and full-stack integration.
