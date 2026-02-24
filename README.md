@@ -6,6 +6,12 @@ This platform allows organisations to manage inventory, create packages, and han
 
 ---
 
+## Frontend Repository
+
+The React frontend for this project can be found here:
+
+https://github.com/Danyy737/inventory-booking-frontend
+
 ## Overview
 
 Inventory Booking SaaS is designed for businesses such as event hire companies, equipment rental providers, and service operators that need to manage stock across overlapping bookings.
