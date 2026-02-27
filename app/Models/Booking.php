@@ -30,9 +30,9 @@ class Booking extends Model
         return $this->hasMany(InventoryReservation::class);
     }
     
-    public function addons()
+public function addons()
 {
-    return $this->hasMany(BookingAddon::class);
+    return $this->hasMany(\App\Models\BookingAddon::class);
 }
 }
 

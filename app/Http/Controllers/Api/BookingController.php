@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\PreviewBookingAvailabilityRequest;
+use App\Models\Addon;
 use App\Models\Booking;
+use App\Models\BookingAddon;
 use App\Models\InventoryItem;
 use App\Models\InventoryReservation;
 use App\Services\AvailabilityService;
@@ -36,7 +38,7 @@ class BookingController extends Controller
         }
 
         $bookings = Booking::where('organisation_id', $user->current_organisation_id)
-            ->with(['reservations.item'])
+            ->with(['reservations.item', 'addons.addon'])
             ->orderByDesc('start_at')
             ->get();
 
@@ -49,7 +51,7 @@ class BookingController extends Controller
 
         $booking = Booking::where('organisation_id', $user->current_organisation_id)
             ->where('id', $id)
-            ->with(['reservations.item'])
+            ->with(['reservations.item', 'addons.addon'])
             ->firstOrFail();
 
         return response()->json(['data' => $booking]);
@@ -73,18 +75,21 @@ class BookingController extends Controller
             'packages' => ['sometimes', 'array'],
             'packages.*.package_id' => ['required_with:packages', 'integer'],
             'packages.*.quantity' => ['required_with:packages', 'integer', 'min:1'],
+
+            'addons' => ['sometimes', 'array'],
+            'addons.*.addon_id' => ['required_with:addons', 'integer'],
+            'addons.*.quantity' => ['required_with:addons', 'integer', 'min:1'],
         ]);
 
-        if (empty($validated['items']) && empty($validated['packages'])) {
-            return response()->json(['message' => 'At least one item or package must be provided'], 422);
+        if (empty($validated['items']) && empty($validated['packages']) && empty($validated['addons'])) {
+            return response()->json(['message' => 'At least one item, package, or addon must be provided'], 422);
         }
 
-        // 1) Build requirements via single service (no duplication)
+        // 1) Build requirements via single service (items + packages + addons)
         $required = app(RequirementBuilder::class)->build($orgId, $validated);
 
-        // Defensive: if builder returns empty for some reason
         if (empty($required)) {
-            return response()->json(['message' => 'At least one item or package must be provided'], 422);
+            return response()->json(['message' => 'At least one item, package, or addon must be provided'], 422);
         }
 
         // 2) Single source of truth availability check
@@ -102,7 +107,7 @@ class BookingController extends Controller
             ], 409);
         }
 
-        // 3) Create booking + reservations transactionally
+        // 3) Create booking + reservations + booking_addons transactionally
         $booking = DB::transaction(function () use ($validated, $orgId, $required) {
             $booking = Booking::create([
                 'organisation_id' => $orgId,
@@ -111,6 +116,7 @@ class BookingController extends Controller
                 'status' => 'confirmed',
             ]);
 
+            // Create reservations from combined requirements (items + packages + addons)
             foreach ($required as $itemId => $qty) {
                 $item = InventoryItem::query()
                     ->where('organisation_id', $orgId)
@@ -127,7 +133,40 @@ class BookingController extends Controller
                 ]);
             }
 
-            return $booking->load('reservations.item');
+            // Create booking_addons rows (snapshot pricing)
+            if (!empty($validated['addons']) && is_array($validated['addons'])) {
+                foreach ($validated['addons'] as $a) {
+                    $addonId = (int) $a['addon_id'];
+                    $qty = (int) $a['quantity'];
+
+                    $addon = Addon::query()
+                        ->where('organisation_id', $orgId)
+                        ->where('id', $addonId)
+                        ->where('is_active', true)
+                        ->with('items')
+                        ->firstOrFail();
+
+                    // enforce rule: addon must reserve inventory
+                    if ($addon->items->isEmpty()) {
+                        abort(response()->json([
+                            'message' => "Addon '{$addon->name}' has no inventory items attached.",
+                        ], 422));
+                    }
+
+                    $unit = (int) $addon->price_cents;
+                    $line = $unit * $qty;
+
+                    BookingAddon::create([
+                        'booking_id' => $booking->id,
+                        'addon_id' => $addon->id,
+                        'quantity' => $qty,
+                        'unit_price_cents' => $unit,
+                        'line_total_cents' => $line,
+                    ]);
+                }
+            }
+
+            return $booking->load(['reservations.item', 'addons.addon']);
         });
 
         return response()->json(['data' => $booking], 201);
@@ -156,9 +195,11 @@ class BookingController extends Controller
             $booking->reservations()->update(['status' => 'cancelled']);
         });
 
-        return response()->json(['data' => $booking->fresh()->load('reservations')]);
+        return response()->json(['data' => $booking->fresh()->load(['reservations', 'addons.addon'])]);
     }
 
+    // Packing list already works because it sums active reservations.
+    // Addons contribute reservations via RequirementBuilder -> store/update flows.
     public function packingList(int $bookingId)
     {
         $orgId = auth()->user()->current_organisation_id;
@@ -202,7 +243,7 @@ class BookingController extends Controller
         $data = $request->validated();
         $orgId = (int) auth()->user()->current_organisation_id;
 
-        // 1) Build requirements via single service (no duplication)
+        // 1) Build requirements via single service (items + packages + addons)
         $required = app(RequirementBuilder::class)->build($orgId, $data);
 
         if (empty($required)) {
@@ -281,90 +322,128 @@ class BookingController extends Controller
     }
 
     public function update(Request $request, $id)
-{
-    $user = $request->user();
-    $this->ensureAdminLike($user);
+    {
+        $user = $request->user();
+        $this->ensureAdminLike($user);
 
-    $orgId = (int) $user->current_organisation_id;
+        $orgId = (int) $user->current_organisation_id;
 
-    $booking = Booking::query()
-        ->where('organisation_id', $orgId)
-        ->with('reservations')
-        ->findOrFail($id);
+        $booking = Booking::query()
+            ->where('organisation_id', $orgId)
+            ->with(['reservations', 'addons'])
+            ->findOrFail($id);
 
-    if ($booking->status === 'cancelled') {
-        return response()->json(['message' => 'Cancelled bookings cannot be updated.'], 422);
-    }
-
-    $validated = $request->validate([
-        'start_at' => ['required', 'date'],
-        'end_at' => ['required', 'date', 'after:start_at'],
-
-        'items' => ['sometimes', 'array'],
-        'items.*.inventory_item_id' => ['required_with:items', 'integer'],
-        'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
-
-        'packages' => ['sometimes', 'array'],
-        'packages.*.package_id' => ['required_with:packages', 'integer'],
-        'packages.*.quantity' => ['required_with:packages', 'integer', 'min:1'],
-    ]);
-
-    if (empty($validated['items']) && empty($validated['packages'])) {
-        return response()->json(['message' => 'At least one item or package must be provided'], 422);
-    }
-
-    $required = app(RequirementBuilder::class)->build($orgId, $validated);
-
-    if (empty($required)) {
-        return response()->json(['message' => 'At least one item or package must be provided'], 422);
-    }
-
-    // Availability check EXCLUDING this booking’s existing reservations
-    $check = app(AvailabilityService::class)->check(
-        $orgId,
-        $validated['start_at'],
-        $validated['end_at'],
-        $required,
-        (int) $booking->id
-    );
-
-    if (!$check['available']) {
-        return response()->json([
-            'message' => 'Insufficient availability',
-            'shortages' => $check['shortages'],
-        ], 409);
-    }
-
-    $updated = DB::transaction(function () use ($booking, $validated, $orgId, $required) {
-        $booking->update([
-            'start_at' => $validated['start_at'],
-            'end_at' => $validated['end_at'],
-        ]);
-
-        // Cancel old reservations so they no longer count
-        $booking->reservations()->update(['status' => 'cancelled']);
-
-        // Create fresh active reservations from the new requirements
-        foreach ($required as $itemId => $qty) {
-            $item = InventoryItem::query()
-                ->where('organisation_id', $orgId)
-                ->where('id', (int) $itemId)
-                ->firstOrFail();
-
-            $item->reservations()->create([
-                'organisation_id' => $orgId,
-                'booking_id' => $booking->id,
-                'reserved_quantity' => (int) $qty,
-                'start_at' => $validated['start_at'],
-                'end_at' => $validated['end_at'],
-                'status' => 'active',
-            ]);
+        if ($booking->status === 'cancelled') {
+            return response()->json(['message' => 'Cancelled bookings cannot be updated.'], 422);
         }
 
-        return $booking->fresh()->load('reservations.item');
-    });
+        $validated = $request->validate([
+            'start_at' => ['required', 'date'],
+            'end_at' => ['required', 'date', 'after:start_at'],
 
-    return response()->json(['data' => $updated], 200);
-}
+            'items' => ['sometimes', 'array'],
+            'items.*.inventory_item_id' => ['required_with:items', 'integer'],
+            'items.*.quantity' => ['required_with:items', 'integer', 'min:1'],
 
+            'packages' => ['sometimes', 'array'],
+            'packages.*.package_id' => ['required_with:packages', 'integer'],
+            'packages.*.quantity' => ['required_with:packages', 'integer', 'min:1'],
+
+            'addons' => ['sometimes', 'array'],
+            'addons.*.addon_id' => ['required_with:addons', 'integer'],
+            'addons.*.quantity' => ['required_with:addons', 'integer', 'min:1'],
+        ]);
+
+        if (empty($validated['items']) && empty($validated['packages']) && empty($validated['addons'])) {
+            return response()->json(['message' => 'At least one item, package, or addon must be provided'], 422);
+        }
+
+        $required = app(RequirementBuilder::class)->build($orgId, $validated);
+
+        if (empty($required)) {
+            return response()->json(['message' => 'At least one item, package, or addon must be provided'], 422);
+        }
+
+        // Availability check EXCLUDING this booking’s existing reservations
+        $check = app(AvailabilityService::class)->check(
+            $orgId,
+            $validated['start_at'],
+            $validated['end_at'],
+            $required,
+            (int) $booking->id
+        );
+
+        if (!$check['available']) {
+            return response()->json([
+                'message' => 'Insufficient availability',
+                'shortages' => $check['shortages'],
+            ], 409);
+        }
+
+        $updated = DB::transaction(function () use ($booking, $validated, $orgId, $required) {
+            $booking->update([
+                'start_at' => $validated['start_at'],
+                'end_at' => $validated['end_at'],
+            ]);
+
+            // Cancel old reservations so they no longer count
+            $booking->reservations()->update(['status' => 'cancelled']);
+
+            // Replace addon selections too
+            $booking->addons()->delete();
+
+            // Create fresh active reservations from the new requirements
+            foreach ($required as $itemId => $qty) {
+                $item = InventoryItem::query()
+                    ->where('organisation_id', $orgId)
+                    ->where('id', (int) $itemId)
+                    ->firstOrFail();
+
+                $item->reservations()->create([
+                    'organisation_id' => $orgId,
+                    'booking_id' => $booking->id,
+                    'reserved_quantity' => (int) $qty,
+                    'start_at' => $validated['start_at'],
+                    'end_at' => $validated['end_at'],
+                    'status' => 'active',
+                ]);
+            }
+
+            // Recreate booking_addons (snapshot pricing)
+            if (!empty($validated['addons']) && is_array($validated['addons'])) {
+                foreach ($validated['addons'] as $a) {
+                    $addonId = (int) $a['addon_id'];
+                    $qty = (int) $a['quantity'];
+
+                    $addon = Addon::query()
+                        ->where('organisation_id', $orgId)
+                        ->where('id', $addonId)
+                        ->where('is_active', true)
+                        ->with('items')
+                        ->firstOrFail();
+
+                    if ($addon->items->isEmpty()) {
+                        abort(response()->json([
+                            'message' => "Addon '{$addon->name}' has no inventory items attached.",
+                        ], 422));
+                    }
+
+                    $unit = (int) $addon->price_cents;
+                    $line = $unit * $qty;
+
+                    BookingAddon::create([
+                        'booking_id' => $booking->id,
+                        'addon_id' => $addon->id,
+                        'quantity' => $qty,
+                        'unit_price_cents' => $unit,
+                        'line_total_cents' => $line,
+                    ]);
+                }
+            }
+
+            return $booking->fresh()->load(['reservations.item', 'addons.addon']);
+        });
+
+        return response()->json(['data' => $updated], 200);
+    }
 }
