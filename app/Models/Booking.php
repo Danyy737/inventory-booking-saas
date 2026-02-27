@@ -29,4 +29,12 @@ class Booking extends Model
     {
         return $this->hasMany(InventoryReservation::class);
     }
+    
+    public function addons()
+{
+    return $this->hasMany(BookingAddon::class);
 }
+}
+
+
+
