@@ -9,6 +9,8 @@ use App\Http\Controllers\Api\MyOrganisationsController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\OrganisationOnboardingController;
 use App\Http\Controllers\Api\OrganisationMembersController;
+use App\Http\Controllers\Api\AddonController;
+use App\Http\Controllers\Api\AddonItemController;
 
 /*
 |--------------------------------------------------------------------------
@@ -78,5 +80,15 @@ Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
     Route::post('/packages/check-availability', [PackageController::class, 'checkAvailability']);
 
     Route::get('/organisations/members', [OrganisationMembersController::class, 'index']);
+
+        // Addons
+    Route::get('/addons', [AddonController::class, 'index']);
+    Route::post('/addons', [AddonController::class, 'store']);
+    Route::get('/addons/{addon}', [AddonController::class, 'show']);
+    Route::put('/addons/{addon}', [AddonController::class, 'update']);
+    Route::delete('/addons/{addon}', [AddonController::class, 'destroy']);
+
+    Route::post('/addons/{addon}/items', [AddonItemController::class, 'store']);
+    Route::delete('/addons/{addon}/items/{item}', [AddonItemController::class, 'destroy']);
 
 });

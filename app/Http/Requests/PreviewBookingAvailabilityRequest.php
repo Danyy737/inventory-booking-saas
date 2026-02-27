@@ -26,6 +26,10 @@ class PreviewBookingAvailabilityRequest extends FormRequest
             'items' => ['sometimes', 'array'],
             'items.*.inventory_item_id' => ['required', 'integer', 'exists:inventory_items,id'],
             'items.*.quantity'          => ['required', 'integer', 'min:1'],
+
+            'addons' => ['sometimes', 'array'],
+'addons.*.addon_id' => ['required_with:addons', 'integer'],
+'addons.*.quantity' => ['required_with:addons', 'integer', 'min:1'],
         ];
     }
 
@@ -44,4 +48,6 @@ class PreviewBookingAvailabilityRequest extends FormRequest
             'items' => $this->input('items', []),
         ]);
     }
+
+    
 }
