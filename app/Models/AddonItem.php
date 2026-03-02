@@ -17,8 +17,8 @@ class AddonItem extends Model
         return $this->belongsTo(Addon::class);
     }
 
-    public function inventoryItem()
-    {
-        return $this->belongsTo(InventoryItem::class);
-    }
+public function inventory_item()
+{
+    return $this->belongsTo(InventoryItem::class, 'inventory_item_id');
+}
 }

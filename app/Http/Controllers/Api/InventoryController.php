@@ -82,48 +82,53 @@ class InventoryController extends Controller
         return response()->json(['data' => $item], 201);
     }
 
-    public function update(Request $request, $id)
-    {
-        $user = $request->user();
-        $this->ensureAdminLike($user);
+ public function update(Request $request, $id)
+{
+    $user = $request->user();
+    $this->ensureAdminLike($user);
 
-        $item = InventoryItem::where('organisation_id', $user->current_organisation_id)
-            ->where('id', $id)
-            ->firstOrFail();
+    $item = InventoryItem::where('organisation_id', $user->current_organisation_id)
+        ->where('id', $id)
+        ->firstOrFail();
 
-        $validated = $request->validate([
-            'name' => ['sometimes', 'string', 'max:255'],
-            'sku' => [
-                'nullable',
-                'string',
-                'max:100',
-                Rule::unique('inventory_items', 'sku')
-                    ->where(fn ($q) => $q->where('organisation_id', $user->current_organisation_id))
-                    ->ignore($item->id),
-            ],
-            'description' => ['nullable', 'string'],
-            'is_active' => ['sometimes', 'boolean'],
-            'total_quantity' => ['sometimes', 'integer', 'min:0'],
-        ]);
+    $validated = $request->validate([
+        'name' => ['sometimes', 'required', 'string', 'max:255'],
+        'sku' => [
+            'nullable',
+            'string',
+            'max:100',
+            Rule::unique('inventory_items', 'sku')
+                ->where(fn ($q) => $q->where('organisation_id', $user->current_organisation_id))
+                ->ignore($item->id),
+        ],
+        'description' => ['nullable', 'string'],
+        'is_active' => ['sometimes', 'boolean'],
+        'total_quantity' => ['sometimes', 'required', 'integer', 'min:0'],
+    ]);
 
-        DB::transaction(function () use ($item, $validated, $user) {
-            $item->update(collect($validated)->except('total_quantity')->toArray());
+    DB::transaction(function () use ($item, $validated, $user) {
+        // Update inventory_items fields (excluding total_quantity which belongs to stock)
+        $item->update(collect($validated)->except('total_quantity')->toArray());
 
-            if (array_key_exists('total_quantity', $validated)) {
-                $item->stock()->updateOrCreate(
-                    [
-                        'organisation_id' => $user->current_organisation_id,
-                        'inventory_item_id' => $item->id,
-                    ],
-                    [
-                        'total_quantity' => $validated['total_quantity'],
-                    ]
-                );
-            }
-        });
+        // Update/create stock row if qty was provided
+        if (array_key_exists('total_quantity', $validated)) {
+            $item->stock()->updateOrCreate(
+                [
+                    'organisation_id' => $user->current_organisation_id,
+                    'inventory_item_id' => $item->id,
+                ],
+                [
+                    'total_quantity' => (int) $validated['total_quantity'],
+                ]
+            );
+        }
+    });
 
-        return response()->json(['data' => $item->load('stock')]);
-    }
+    // Return fresh to guarantee latest stock value is included
+    return response()->json([
+        'data' => $item->fresh()->load('stock')
+    ]);
+}
 
 public function destroy(Request $request, $id)
 {
