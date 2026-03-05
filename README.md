@@ -43,6 +43,27 @@ The system enforces this using reservation logic, availability preview endpoints
 - Update package contents
 - Expand packages into inventory requirements during availability checks
 
+### Addons (Inventory-Backed Upsells)
+
+Addons are optional extras that can be attached to a booking (e.g. Extra Chairs, Extra Table).
+
+Each addon:
+- Has pricing (`fixed` or `per_unit`)
+- Is linked to one or more inventory items
+- Defines `quantity_per_unit` per inventory item
+- Reserves inventory when used in a booking
+- Is soft-deleted via `is_active` (inactive addons are hidden but preserved for history)
+
+Example:
+
+If:
+- Addon “Extra Chairs”
+- `quantity_per_unit = 5`
+- Booking selects `Extra Chairs x 2`
+
+The system reserves:
+- 10 chairs
+
 ### Bookings
 - Create bookings with start and end date/time
 - Overlap detection between bookings
@@ -82,22 +103,30 @@ The system enforces this using reservation logic, availability preview endpoints
 ### Booking Flow
 
 1. User selects organisation.
-2. User creates a booking with start and end time.
-3. System:
+2. User selects:
+   - Package
+   - Optional addons
+3. System builds full inventory requirements:
+   - Package items
+   - Addon items (multiplied by quantity_per_unit)
+4. System:
    - Finds overlapping bookings.
    - Calculates reserved quantities per inventory item.
    - Compares against total stock.
-4. If sufficient stock exists → booking is confirmed.
-5. If insufficient stock exists → 409 conflict response returned.
+5. If sufficient stock exists → booking is confirmed.
+6. If insufficient stock exists → 409 conflict response returned.
 
 ---
 
 ### Reservation System
 
 When a booking is confirmed:
-- Each inventory item is stored as a reservation.
+- All required inventory (from packages and addons) is converted into reservation records.
 - Availability checks subtract existing reservations.
-- Overlapping bookings are detected using time comparison logic.
+- Addons generate additional inventory reservations based on `quantity_per_unit`.
+- Addon pricing is snapshotted at the time of booking.
+
+Overlapping bookings are detected using time comparison logic.
 
 Overlap rule:
 
@@ -152,6 +181,15 @@ This ensures inventory cannot be double-booked across overlapping time windows.
 - PUT /packages/{id}/items
 - POST /packages/check-availability
 
+### Addons
+- GET /addons
+- POST /addons
+- GET /addons/{addon}
+- PUT /addons/{addon}
+- DELETE /addons/{addon}
+- POST /addons/{addon}/items
+- DELETE /addons/{addon}/items/{item}
+
 ---
 
 ## Installation
@@ -184,9 +222,11 @@ MVP Complete.
 
 The system currently supports:
 - Multi-tenant inventory isolation
-- Real-time availability validation
+- Real-time availability validation (packages + addons)
 - Reservation-based booking conflict prevention
 - Package expansion logic
+- Addon expansion logic
+- Addon pricing snapshotting
 - Standalone availability checking
 - Booking packing lists
 
@@ -194,7 +234,6 @@ The system currently supports:
 
 ## Roadmap (Future Enhancements)
 
-- Package addons
 - Booking lifecycle states (draft / confirmed / completed)
 - Damage and return tracking
 - Calendar view UI
