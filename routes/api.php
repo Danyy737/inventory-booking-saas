@@ -18,10 +18,11 @@ use App\Http\Controllers\Api\AddonItemController;
 |--------------------------------------------------------------------------
 */
 
-Route::post('/auth/login', [AuthController::class, 'login']);
+Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
+Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
 Route::get('/health', fn () => response()->json(['ok' => true]));
 Route::get('/ping', fn () => response()->json(['ok' => true]));
-Route::post('/auth/register', [AuthController::class, 'register']);
+
 
 /*
 |--------------------------------------------------------------------------
