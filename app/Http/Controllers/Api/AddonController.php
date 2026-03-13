@@ -29,7 +29,6 @@ class AddonController extends Controller
         $org = $request->attributes->get('currentOrganisation');
         $role = $request->attributes->get('currentOrgRole');
 
-        // same auth pattern as PackageController
         if (!\App\Support\OrgRole::isAdminLike($role)) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
@@ -42,7 +41,15 @@ class AddonController extends Controller
             'is_active' => ['sometimes', 'boolean'],
 
             'items' => ['required', 'array', 'min:1'],
-            'items.*.inventory_item_id' => ['required', 'integer'],
+
+            'items.*.inventory_item_id' => [
+                'required',
+                'integer',
+                Rule::exists('inventory_items', 'id')->where(fn ($q) =>
+                    $q->where('organisation_id', $org->id)
+                ),
+            ],
+
             'items.*.quantity_per_unit' => ['required', 'integer', 'min:1'],
         ]);
 
@@ -92,7 +99,15 @@ class AddonController extends Controller
             'is_active' => ['sometimes', 'boolean'],
 
             'items' => ['sometimes', 'array', 'min:1'],
-            'items.*.inventory_item_id' => ['required_with:items', 'integer'],
+
+            'items.*.inventory_item_id' => [
+                'required_with:items',
+                'integer',
+                Rule::exists('inventory_items', 'id')->where(fn ($q) =>
+                    $q->where('organisation_id', $org->id)
+                ),
+            ],
+
             'items.*.quantity_per_unit' => ['required_with:items', 'integer', 'min:1'],
         ]);
 
